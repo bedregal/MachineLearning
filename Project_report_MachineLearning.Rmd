@@ -1,0 +1,137 @@
+---
+title: "Project Report on Human Activity Recognition, as part of the Coursera Practical Machine Learning course"
+author: "Alejandro G. Bedregal"
+output: html_document
+---
+
+
+
+**DATA SET & EXPLORATORY DATA ANALYSIS**
+
+In this study, we use data from the WLE dataset [1] to build a model that predicts if a person is doing barbell lifts correctly. Briefly, 6 male participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways (A,B,C,D and E). The data was aquired through 4 accelerometers located in the 'belt', 'forearm', 'arm' and 'dumbbell'. The dataset consists of 38 variables measured for each of the 4 accelerometers and including 14,718 measurements. More information is available from the WLE dataset website: http://groupware.les.inf.puc-rio.br/har
+
+We started by splitting the dataset in a randomly selected trainning (3/4 of total dataset) and  testing (1/4) subsamples
+
+````{r,eval=FALSE}
+inTrain <- createDataPartition(y=Data0$classe, p=0.75, list=FALSE)
+trainData0 <- Data0[inTrain,]
+testData0 <- Data0[-inTrain,]
+```
+
+In what follows, we put aside the testing sample and worked with the trainning sample. In a **first step of pre-processing** the data, we remove variables that were not properly defined in the dataset (i.e., NA), leaving **13 different measurements for each accelerometer**. These parameters include: roll, pitch, yaw and total acceleration; 'gyro', 'magnet' and acceleration in each of the 3 cartesian spatial dimensions
+
+We perform an **exploratory data analysis**. In Figures 1 and 2 we show examples of dispersion plots for measuremets from the accelerometers in the arm and dumbbell, respectively. 
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+library("AppliedPredictiveModeling")
+library("caret")
+
+set.seed(1701)
+
+#Reading data
+Data0 <- read.csv("data_proj/pml-training.csv")
+
+#Create Train and Test samples
+inTrain <- createDataPartition(y=Data0$classe, p=0.75, list=FALSE)
+trainData0 <- Data0[inTrain,]
+testData0 <- Data0[-inTrain,]
+
+#Pre-processing Train Data
+flgOK <- grep("^magnet|^accel|^gyros|^roll|^pitch|^yaw|^total", colnames(trainData0), value=T)
+flgClasse <- grep("^classe", colnames(trainData0), value=T)
+trainData <- data.frame(classe=trainData0[,flgClasse], trainData0[,flgOK]) # 52 variables
+
+flgBelt <- grep("belt", colnames(trainData), value=T)
+flgArm <- grep("_arm", colnames(trainData), value=T)
+flgForearm <- grep("forearm", colnames(trainData), value=T)
+flgDum <- grep("dumbbell", colnames(trainData), value=T)
+
+#Data for each sensor
+trainData_B <- data.frame(classe=trainData[,1],trainData[,flgBelt])
+trainData_A <- data.frame(classe=trainData[,1],trainData[,flgArm])
+trainData_F <- data.frame(classe=trainData[,1],trainData[,flgForearm])
+trainData_D <- data.frame(classe=trainData[,1],trainData[,flgDum])
+
+        #coloring points acording to ABCDE
+        colo <- character(nrow(trainData))
+        colo[trainData[,1] == "A"] <-"black"
+        colo[trainData[,1] == "B"] <-"green"
+        colo[trainData[,1] == "C"] <-"blue"
+        colo[trainData[,1] == "D"] <-"orange"
+        colo[trainData[,1] == "E"] <-"red"
+
+
+        #Fig 1
+        pairs(trainData_A[,2:5], 
+        main="Figure 1: Example of 4 Arm Accel. param. correlations",pch='.',col=colo)
+        #Fig 2
+        pairs(trainData_D[,6:9], 
+              main="Figure 2: Example of 4 Dumbbell Accel. param. correlations",pch='.',col=colo)
+
+```
+
+In 5 different colors we flag the data according to the 5 different ways to do the excercise. As we see, complex patterns emerge from some of the different parameters measured in a given accelerator. Also, some of them seem to be highly correlated. By calculating **correlation matrices** for the 13 parametrs of each accelerometer we found that for several parameter pairs the correlations are >0.8. Instead, such large numbers of highly correlated pairs do not appear as often if parameters from different accelerator are compared.
+ 
+
+
+**PRINCIPAL COMPONENT ANALYSIS (PCA)**
+
+The exploratory data analysis described above suggests that we can reduce the number of parameters for each accelerometer as many of those parameters are strongly correlated. We decided to continue our data pre-processing by performing a **Principal Component Analysis (PCA)** for each of the accelertor parameter-sets. For example, here we use the CARET package in the 13-parameter data from the arm accelerometer:
+
+````{r, eval=F}
+pcArm <-preProcess(trainData_Arm[,2:14], method="pca", thresh=0.9)
+pcPred_Aarm <- predict(pcArm,trainData_Arm[,2:14])
+```
+
+For each accelerometer we capture >90% of the total variance. In this way we reduce the number of model parameters and, at the same time, we allowed our model results to be interpretable in function of each of the 4 accelerometers. As a result of our PCA for each accelerometer we reduce from 13 to 7 the total number of parameters for the arm accelerometer. In a similar way, we reduce the number of parameters to 4, 6 and 8 for the belt, dumbbell and forearm accelerometers, respectively. In summary, we reduced from 52 to 25 the number of parameters to fit with our model and still retain >90% of the variability between parameters.
+
+
+
+**THE MODEL**
+
+We decided to use *Generalized Boosted Models (gbm)* to perform our modeling. For our dataset, it provided better accuracy compared to other techniques like the Linear Discriminant Analysis (LDA). 
+
+````{r, eval=FALSE}
+trainPC <- data.frame(pcPred_Arm, pcPred_Belt, pcPred_Dumbblee, pcPred_Forearm)
+modelFit_GBM <- train(trainData$classe ~., method="gbm", data=trainPC)
+```
+
+The final values used for the best gbm model were n.trees = 150, interaction.depth = 3, shrinkage = 0.1 and n.minobsinnode = 10. 
+Accuracy (= 0.884 for the best model) was used to select the optimal model using  the largest value.
+ 
+ 
+ 
+**OUT OF SAMPLE ERROR AND CROSS-VALIDATION**
+
+We evaluate the **out of sample error** using **cross-validation**. We quantify our errors through 'Accuracy' (i.e., the probability of getting a correct outcome) and 'Concordance' (ideal for multi-class data like ours), parametrized with *kappa* parameter.
+
+First, we use our trainning dataset and split it in a sub-trainning set (3/4 of original training dataset) and a sub-testing set (1/4). Then we build our gbm model in an analogous way as described in the previous section, and we evaluate our best gmb model in the sub-testing set. We repeat this process 30 times. In each iteration we randomly selected our sub-training and sub-testing datasets, and store the retrieved accuracy and kappa. Finally, we estimated bi-weight means for the resulting distributions in accuracy and kappa. Our mean out-of-sample error extimations are
+
+*Accuracy* = 0.872 (lower than the 0.884 in-sample estimation)
+
+*Kappa* = 0.841
+
+
+
+**TESTING OUR MODEL**
+
+Finally, we test our best gmb model in the testing dataset. We applied the same data pre-processing used for the trainning set to the testing set (i.e., selecting the 13 relevant parameters for each accelerator, PCA using the results found for the trainning dataset).
+
+
+````{r,message=FALSE,warning=FALSE}
+predTest <- predict(modelFit_GBM,testPC)
+```
+````{r}
+confusionMatrix(predTest,testData$classe)
+```
+
+By comparing the predicted ways of doing the excercise (A, B, C, D and E) with the real values, the 'confussionMatrix' task shows us our best gmb model recovers 89% of the results correctly.
+
+
+
+**REFERENCES**
+
+[1]  Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
+
